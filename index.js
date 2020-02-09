@@ -1,6 +1,8 @@
 var Service;
 var Characteristic;
 var Accessory;
+var AccessoryType;
+var UUIDGen;
 var net = require('net');
 var http = require('http');
 var pollingToEvent = require('polling-to-event');
@@ -8,17 +10,59 @@ var pollingToEvent = require('polling-to-event');
 module.exports = function(homebridge) {
     Service = homebridge.hap.Service;
     Characteristic = homebridge.hap.Characteristic;
-    homebridge.registerAccessory("homebridge-rotel-arkku", "RotelA", RotelA);
+    Accessory = homebridge.platformAccessory;
+    AccessoryType = homebridge.hap.Accessory.Categories;
+    UUIDGen = homebridge.hap.uuid;
+    //homebridge.registerAccessory("homebridge-rotel-arkku", "RotelA", RotelA);
+    homebridge.registerPlatform("homebridge-rotel-arkku", "RotelAmp", RotelAmp);
 }
 
-function RotelA(log, config, api) {
+function RotelAmp(log, config, api) {
     this.log = log;
-    var that = this;
     this.config = config;
+    this.api = api;
+    this.devices = [];
+    this.accessories = [];
+    this.name = config["name"];
+
+    this.api.on('didFinishLaunching', this.didFinishLaunching.bind(this));
+}
+
+RotelAmp.prototype = {
+    accessories: function(callback) {
+        callback(this.accessories);
+    },
+    didFinishLaunching: function() {
+        this.log.debug("RotelAmp did finish launching");
+        var amplifiers = this.config.accessories;
+        this.accessories = []
+        this.devices = [];
+        for (i = 0; i < amplifiers.length; ++i) {
+            var device = new RotelA(this.log, amplifiers[i], this.api, this);
+            this.devices.push(device);
+            if (device.platformAccessory) {
+                device.platformAccessory.reachable = true;
+                this.accessories.push(device.platformAccessory);
+            }
+        }
+        this.api.publishExternalAccessories("homebridge-rotel-arkku", this.accessories);
+    },
+    configureAccessory: function(accessory) {
+        this.log("configureAccessory called: %s", accessory);
+    }
+}
+
+function RotelA(log, config, api, platform) {
+    this.log = log;
+    this.config = config;
+    this.api = api;
+    this.platform = platform;
+    var that = this;
 
     this.name = config["name"];
     this.ipAddress = config["ip_address"];
     this.port = config["port"];
+    this.uuid = config["uuid"] || UUIDGen.generate("homebridge-rotel-arkku-" + this.name);
     this.interval = config["poll_interval"] || 300;
     this.serialNumber = config["serial_number"] || "00000";
     this.model = config["model"] || "Rotel Amplifier";
@@ -28,6 +72,8 @@ function RotelA(log, config, api) {
     this.inputServiceBySource = {};
     this.inputSourceByIndex = {};
     this.inputIndexBySource = {};
+    this.speakerAName = config["speaker_a_name"] || (this.name + " Output A");
+    this.speakerBName = config["speaker_b_name"] || (this.name + " Output B");
     this.inputSources = (config["input_sources"] || {
         'opt1': 'Optical 1',
         'opt2': 'Optical 2',
@@ -43,6 +89,8 @@ function RotelA(log, config, api) {
         'aux2': 'Aux 2'
     });
 
+    this.usePlatformAccessory = this.platform ? true : false;
+
     this.attempt = 0;
     this.statePower = 0;
     this.stateVolume = 0;
@@ -53,7 +101,7 @@ function RotelA(log, config, api) {
         this.interval = 11;
     }
 
-    this.log("Rotel init %s (%s:%s) interval %s seconds", this.name, this.ipAddress, this.port, this.interval);
+    this.log("Rotel init %s (%s:%s) interval %s seconds: %s", this.name, this.ipAddress, this.port, this.interval, this.uuid);
 
     var statusEmitter = pollingToEvent(function(done) {
         that.getPowerState(function(error, response) {
@@ -166,6 +214,11 @@ RotelA.prototype = {
 			if (result != null) {
 				that.statePower = state;
 				that.log("Set power state: %s %s", that.statePower, result);
+                if (that.tvService) {
+                    // Force a status update on the service
+                    that.tvService.getCharacteristic(Characteristic.Active)
+                        .setValue(that.statePower, null, "statuspoll");
+                }
 			} else {
 				that.log("Failed to set power " + (state ? "on" : "off"));
             }
@@ -290,7 +343,7 @@ RotelA.prototype = {
     },
 
     getVolume: function(callback, context) {
-        if (!(context && context == "statuspoll")) {
+        if (!(context && context == "statuspoll" && this.statePower)) {
             callback(null, this.stateVolume);
             return;
         }
@@ -321,8 +374,19 @@ RotelA.prototype = {
     },
 
     getMuted: function(callback, context) {
-        this.log("Get muted");
-        callback(null, this.stateMuted);
+        if (!(context && context == "statuspoll" && this.statePower)) {
+            callback(null, this.stateMuted);
+            return;
+        }
+        this.log.debug("Get muted");
+		var that = this;
+		this.doRequest("? mute", function(result) {
+			if (result != null) {
+                that.stateMuted = result ? 1 : 0;
+                that.log.debug("Got muted state: ", result);
+			}
+			callback(null, that.stateMuted);
+		});
     },
 
     setMuted: function(muted, callback, context) {
@@ -330,11 +394,21 @@ RotelA.prototype = {
             callback(null, this.stateMuted);
             return;
         }
-        this.log("Set muted: %s", muted);
-        callback(null, this.stateMuted);
+		var that = this;
+		this.doRequest("mute " + (muted ? "on" : "off"), function(result) {
+			if (result != null) {
+                that.stateMuted = result ? 1 : 0;
+                that.log("Set muted state: ", result);
+			}
+			callback(null, that.stateMuted);
+		});
     },
 
     getInputSource: function(callback, context) {
+        if (!this.statePower) {
+            callback(null, this.stateInput);
+            return;
+        }
         this.log.debug("Get input source");
 		var that = this;
 		this.doRequest("? source", function(result) {
@@ -366,6 +440,10 @@ RotelA.prototype = {
     },
 
     getSpeakerStateA: function(callback, context) {
+        if (!this.statePower) {
+			callback(null, this.stateSpeakerA);
+            return;
+        }
         this.log.debug("Get speaker state A");
 		var that = this;
 		this.doRequest("? a", function(result) {
@@ -393,6 +471,10 @@ RotelA.prototype = {
     },
 
     getSpeakerStateB: function(callback, context) {
+        if (!this.statePower) {
+			callback(null, this.stateSpeakerB);
+            return;
+        }
         this.log.debug("Get speaker state B");
 		var that = this;
 		this.doRequest("? b", function(result) {
@@ -420,24 +502,36 @@ RotelA.prototype = {
     },
 
     identify: function(callback) {
+        this.log.debug("Identify called " + this.name);
         callback();
     },
 
     prepareServices: function() {
         var that = this;
+        var fullName = this.name;
 
-        this.informationService = new Service.AccessoryInformation();
+        if (this.usePlatformAccessory) {
+            fullName = this.platform.name + ' ' + this.name;
+            this.log("Setting up as a platform accessory: %s", fullName);
+            this.platformAccessory = new Accessory(fullName, this.uuid, AccessoryType.TELEVISION);
+            this.informationService = this.platformAccessory.getService(Service.AccessoryInformation);
+        } else {
+            this.platformAccessory = null;
+            this.informationService = new Service.AccessoryInformation();
+            this.informationService
+                .setCharacteristic(Characteristic.Name, this.name);
+            this.enabledServices.push(this.informationService);
+        }
+
         this.informationService
             .setCharacteristic(Characteristic.Name, this.name)
             .setCharacteristic(Characteristic.Manufacturer, 'Rotel')
             .setCharacteristic(Characteristic.Model, this.model)
             .setCharacteristic(Characteristic.SerialNumber, this.serialNumber);
-        this.enabledServices.push(this.informationService);
 
-        this.tvService = new Service.Television(this.name, 'tvService' + this.name);
+        this.tvService = new Service.Television(this.name, this.name + 'TV');
         this.tvService
             .setCharacteristic(Characteristic.Name, this.name)
-            .setCharacteristic(Characteristic.ConfiguredName, this.name)
             .setCharacteristic(Characteristic.SleepDiscoveryMode, Characteristic.SleepDiscoveryMode.ALWAYS_DISCOVERABLE)
             .setCharacteristic(Characteristic.ActiveIdentifier, this.stateInput)
             .setCharacteristic(Characteristic.Active, this.statePower);
@@ -454,9 +548,9 @@ RotelA.prototype = {
             .on('set', this.setInputSource.bind(this));
         this.enabledServices.push(this.tvService);
 
-        this.speakerService = new Service.TelevisionSpeaker(this.name + ' Volume', 'tvSpeakerService');
+        this.speakerService = new Service.TelevisionSpeaker(this.name + ' Volume', this.name + 'Speaker');
         this.speakerService
-            .setCharacteristic(Characteristic.Name, this.name)
+            .setCharacteristic(Characteristic.Name, this.name + ' Volume')
             .setCharacteristic(Characteristic.Active, Characteristic.Active.ACTIVE)
             .setCharacteristic(Characteristic.VolumeControlType, Characteristic.VolumeControlType.ABSOLUTE);
         this.speakerService
@@ -484,9 +578,10 @@ RotelA.prototype = {
             this.inputIndexBySource[sourceId] = sourceIndex;
             this.log("Input %s is %s: %s", sourceIndex, sourceId, sourceName);
 
-            var inputSource = new Service.InputSource(this.name, this.name + ' ' + sourceId);
+            var inputSource = new Service.InputSource(this.name, this.name + 'Input' + sourceId.toUpperCase());
             inputSource
                 .setCharacteristic(Characteristic.Identifier, sourceIndex)
+                .setCharacteristic(Characteristic.Name, this.name + ' ' + sourceId + ' in')
                 .setCharacteristic(Characteristic.ConfiguredName, sourceName)
                 .setCharacteristic(Characteristic.InputSourceType, Characteristic.InputSourceType.APPLICATION)
                 .setCharacteristic(Characteristic.IsConfigured, Characteristic.IsConfigured.CONFIGURED);
@@ -497,22 +592,39 @@ RotelA.prototype = {
         }
 
         if (this.isSpeakerSelectionEnabled) {
-            this.speakerServiceA = new Service.Switch(this.name + ' Output A', 'SpeakerA');
+            this.speakerServiceA = new Service.Switch(this.name + ' Output A', this.name + 'SpeakerA');
+            this.speakerServiceB = new Service.Switch(this.name + ' Output B', this.name + 'SpeakerB');
+
             this.speakerServiceA
                 .getCharacteristic(Characteristic.On)
                 .on('get', this.getSpeakerStateA.bind(this))
                 .on('set', this.setSpeakerStateA.bind(this));
+            this.speakerServiceA
+                .setCharacteristic(Characteristic.Name, this.speakerAName);
             this.enabledServices.push(this.speakerServiceA);
 
-            this.speakerServiceB = new Service.Switch(this.name + ' Output B', 'SpeakerB');
             this.speakerServiceB
                 .getCharacteristic(Characteristic.On)
                 .on('get', this.getSpeakerStateB.bind(this))
                 .on('set', this.setSpeakerStateB.bind(this));
+            this.speakerServiceB
+                .setCharacteristic(Characteristic.Name, this.speakerBName);
             this.enabledServices.push(this.speakerServiceB);
         }
 
         this.maxInputSource = sourceIndex;
+
+        if (this.platformAccessory) {
+            for (var i = 0; i < this.enabledServices.length; ++i) {
+                var service = this.enabledServices[i];
+                this.log.debug("Adding service: %s", service);
+                try {
+                    this.platformAccessory.addService(service);
+                } catch (error) {
+                    this.log("Failed to add service: %s\nFailed service: %s", error, service);
+                }
+            }
+        }
 
         return this.enabledServices;
     },
