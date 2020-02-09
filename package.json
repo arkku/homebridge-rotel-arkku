@@ -1,0 +1,31 @@
+{
+  "name": "homebridge-rotel-arkku",
+  "version": "0.0.1",
+  "description": "Homebridge module to control Rotel amplifier",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arkku/homebridge-rotel-arkku.git"
+  },
+  "dependencies": {
+    "polling-to-event": "^2.0.2"
+  },
+  "keywords": [
+    "homebridge",
+    "rotel",
+    "homebridge-plugin"
+  ],
+  "engines": {
+    "node": ">=0.12.0",
+    "homebridge": ">=0.4.46"
+  },
+  "author": "arkku",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/arkku/homebridge-rotel-arkku/issues"
+  },
+  "homepage": "https://github.com/arkku/homebridge-rotel-arkku.git"
+}
