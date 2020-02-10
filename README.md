@@ -16,7 +16,7 @@ protocol), and as such I don't expect it to be particularly useful for anyone
 other than myself as is. It does show how to make a Homebridge platform
 accessory, but other than that my JavaScript coding style is horrible
 spaghetti and does not set a good example. (In my defense, I used another
-Homebridge plugin as an example, since I don't really know Node.js myself).
+Homebridge plugin as an example, since I don't really know Node.js myself.)
 
 ~ [Kimmo Kulovesi](https://arkku.dev/), 2020-02-09
 

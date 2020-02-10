@@ -245,6 +245,7 @@ RotelA.prototype = {
 
     pressRemoteButton: function(remoteKey, callback, context) {
         var button = "";
+        var that = this;
         switch (remoteKey) {
         case Characteristic.RemoteKey.REWIND:
             button = "fast_back";
@@ -259,33 +260,51 @@ RotelA.prototype = {
             button = "track_back";
             break;
         case Characteristic.RemoteKey.ARROW_UP:
-            var volume = this.stateVolume + 2;
-            if (volume > 100) {
-                volume = 100;
-            }
-            this.setVolume(volume, (x, y) => { callback(null, remoteKey); }, context);
-            return;
+            this.volumeIncrement(true, null, context);
+            break;
         case Characteristic.RemoteKey.ARROW_DOWN:
-            var volume = this.stateVolume - 2;
-            if (volume < 0) {
-                volume = 0;
-            }
-            this.setVolume(volume, (x, y) => { callback(null, remoteKey); }, context);
-            return;
+            this.volumeIncrement(false, null, context);
+            break;
         case Characteristic.RemoteKey.ARROW_LEFT:
+            button = "left";
+            break;
+            /*
             var targetInput = this.stateInput - 1;
             if (targetInput < 1) {
                 targetInput = this.maxInputSource;
             }
-            this.setInputSource(targetInput, (x, y) => { callback(null, remoteKey); }, context);
+            this.setInputSource(targetInput, (x, src) => {
+                if (src) {
+                    that.log.debug("Switched to next previous input: %s", src);
+                    that.stateInput = src;
+                    if (that.tvService) {
+                        that.tvService.getCharacteristic(Characteristic.ActiveIdentifier).setValue(that.stateInput, null, "statuspoll");
+                    }
+                }
+                callback(null, remoteKey);
+            }, context);
             return;
+            */
         case Characteristic.RemoteKey.ARROW_RIGHT:
+            button = "right";
+            break;
+            /*
             var targetInput = this.stateInput + 1;
             if (targetInput > this.maxInputSource) {
                 targetInput = 1;
             }
-            this.setInputSource(targetInput, (x, y) => { callback(null, remoteKey); }, context);
+            this.setInputSource(targetInput, (x, src) => {
+                if (src) {
+                    that.log.debug("Switched to next input: %s", src);
+                    that.stateInput = src;
+                    if (that.tvService) {
+                        that.tvService.getCharacteristic(Characteristic.ActiveIdentifier).setValue(that.stateInput, null, "statuspoll");
+                    }
+                }
+                callback(null, remoteKey);
+            }, context);
             return;
+            */
         case Characteristic.RemoteKey.SELECT:
             button = "enter";
             break;
@@ -299,7 +318,7 @@ RotelA.prototype = {
             button = "pause";
             break;
         case Characteristic.RemoteKey.INFORMATION:
-            button = "dimmer";
+            button = "menu";
             break;
         default:
             button = "";
@@ -343,7 +362,7 @@ RotelA.prototype = {
     },
 
     getVolume: function(callback, context) {
-        if (!(context && context == "statuspoll" && this.statePower)) {
+        if (!(context && context == "statuspoll")) {
             callback(null, this.stateVolume);
             return;
         }
@@ -373,8 +392,21 @@ RotelA.prototype = {
 		});
     },
 
+    volumeIncrement: function(isUp, callback, context) {
+		var that = this;
+		this.doRequest("vol " + (isUp ? "up" : "down"), function(result) {
+			if (result != null && result >= 0 && result <= 100) {
+				that.stateVolume = result;
+                that.speakerService.getCharacteristic(Characteristic.Volume).setValue(that.stateVolume, null, "statuspoll");
+			}
+            if (callback) {
+                callback(null, that.stateVolume);
+            }
+		});
+    },
+
     getMuted: function(callback, context) {
-        if (!(context && context == "statuspoll" && this.statePower)) {
+        if (!(context && context == "statuspoll")) {
             callback(null, this.stateMuted);
             return;
         }
@@ -405,10 +437,6 @@ RotelA.prototype = {
     },
 
     getInputSource: function(callback, context) {
-        if (!this.statePower) {
-            callback(null, this.stateInput);
-            return;
-        }
         this.log.debug("Get input source");
 		var that = this;
 		this.doRequest("? source", function(result) {
@@ -440,10 +468,6 @@ RotelA.prototype = {
     },
 
     getSpeakerStateA: function(callback, context) {
-        if (!this.statePower) {
-			callback(null, this.stateSpeakerA);
-            return;
-        }
         this.log.debug("Get speaker state A");
 		var that = this;
 		this.doRequest("? a", function(result) {
@@ -471,10 +495,6 @@ RotelA.prototype = {
     },
 
     getSpeakerStateB: function(callback, context) {
-        if (!this.statePower) {
-			callback(null, this.stateSpeakerB);
-            return;
-        }
         this.log.debug("Get speaker state B");
 		var that = this;
 		this.doRequest("? b", function(result) {
